@@ -1,0 +1,75 @@
+[package]
+name = "fprime-dp-convert"
+version = "0.1.0"
+edition = "2021"
+authors = ["FPrime Team"]
+description = "Convert FPrime Data Products and telemetry to HDF5 time series"
+license = "Apache-2.0"
+repository = "https://github.com/Willmac16/fprime-dp-convert"
+readme = "README.md"
+keywords = ["fprime", "telemetry", "hdf5", "spacecraft"]
+categories = ["aerospace", "parser-implementations", "encoding"]
+
+[lib]
+name = "fprime_tlm"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fprime-dp-convert"
+path = "src/main.rs"
+
+[dependencies]
+# Serialization
+byteorder = "1.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Hashing
+crc32fast = "1.4"
+sha2 = "0.10"
+
+# HDF5 (optional, enabled by default)
+hdf5 = { version = "0.8", optional = true }
+
+# CLI
+clap = { version = "4.4", features = ["derive"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Utilities
+indexmap = { version = "2.1", features = ["serde"] }
+log = "0.4"
+env_logger = "0.11"
+chrono = "0.4"
+
+# Parallel processing (optional)
+rayon = { version = "1.8", optional = true }
+
+[dev-dependencies]
+proptest = "1.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3.9"
+pretty_assertions = "1.4"
+
+[features]
+default = ["hdf5"]
+hdf5 = ["dep:hdf5"]
+parallel = ["dep:rayon"]
+
+[[bench]]
+name = "parsing"
+harness = false
+
+[[bench]]
+name = "hdf5_write"
+harness = false
+required-features = ["hdf5"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[profile.bench]
+debug = true
