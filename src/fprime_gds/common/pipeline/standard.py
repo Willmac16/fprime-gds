@@ -24,6 +24,7 @@ from fprime_gds.common.utils.config_manager import ConfigManager
 
 # Local imports for the sake of composition
 from . import encoding, files, histories
+from .metrics import PipelineMetrics
 
 
 class StandardPipeline:
@@ -53,6 +54,7 @@ class StandardPipeline:
         self.__histories = histories.Histories()
         self.__filing = files.Filing()
         self.__transport_type = ThreadedTCPSocketClient
+        self.__metrics = PipelineMetrics()
 
     def setup(
         self,
@@ -104,6 +106,9 @@ class StandardPipeline:
         )
         # Register distributor to client socket
         self.client_socket.register(self.distributor)
+        # Attach pipeline metrics for monitoring queue depths and throughput
+        self.__metrics.attach(self)
+        self.__metrics.start()
         # Final setup step is to make a logging directory, and register in the logger
         if logging_prefix and data_logging_enabled:
             self.setup_logging(logging_prefix)
@@ -244,6 +249,15 @@ class StandardPipeline:
         :return: filing compositions
         """
         return self.__filing
+
+    @property
+    def metrics(self):
+        """
+        Pipeline metrics for monitoring queue depths and throughput.
+
+        :return: PipelineMetrics instance
+        """
+        return self.__metrics
 
     @property
     def dictionaries(self):

@@ -12,6 +12,7 @@ is represented by a single thread, as it is not dealing with multiple streams of
 
 import logging
 import threading
+import time
 from queue import Empty, Full, Queue
 
 from fprime_gds.common.utils.config_manager import ConfigManager
@@ -56,11 +57,16 @@ class Downlinker:
         self.running = True
         self.th_ground = None
         self.th_data = None
+        self.th_metrics = None
         self.adapter = adapter
         self.ground = ground
         self.deframer = deframer
         self.outgoing = Queue()
         self.discarded = discarded
+        # Metrics counters
+        self._frames_deframed = 0
+        self._frames_sent = 0
+        self._bytes_read = 0
 
     def start(self):
         """Starts the downlink pipeline"""
@@ -74,6 +80,10 @@ class Downlinker:
         )
         self.th_data.daemon = True
         self.th_data.start()
+        self.th_metrics = threading.Thread(
+            target=self._metrics_loop, name="DownlinkMetricsThread", daemon=True
+        )
+        self.th_metrics.start()
 
     def deframing(self):
         """Deframing stage of downlink
@@ -84,8 +94,11 @@ class Downlinker:
         pool = b""
         while self.running:
             # Blocks until data is available, but may still return b"" if timeout
-            pool += self.adapter.read()
+            chunk = self.adapter.read()
+            self._bytes_read += len(chunk)
+            pool += chunk
             frames, pool, discarded_data = self.deframer.deframe_all(pool, no_copy=True)
+            self._frames_deframed += len(frames)
             try:
                 for frame in frames:
                     self.outgoing.put_nowait(frame)
@@ -115,7 +128,41 @@ class Downlinker:
                     frames.append(self.outgoing.get_nowait())
             except Empty:
                 pass
+            self._frames_sent += len(frames)
             self.ground.send_all(frames)
+
+    def _metrics_loop(self):
+        """Periodically log comm-layer downlink metrics."""
+        last_deframed = 0
+        last_sent = 0
+        last_bytes = 0
+        last_time = time.monotonic()
+        while self.running:
+            time.sleep(2.0)
+            now = time.monotonic()
+            elapsed = now - last_time
+            last_time = now
+            cur_deframed = self._frames_deframed
+            cur_sent = self._frames_sent
+            cur_bytes = self._bytes_read
+            deframe_rate = (cur_deframed - last_deframed) / elapsed if elapsed > 0 else 0
+            send_rate = (cur_sent - last_sent) / elapsed if elapsed > 0 else 0
+            byte_rate = (cur_bytes - last_bytes) / elapsed if elapsed > 0 else 0
+            last_deframed = cur_deframed
+            last_sent = cur_sent
+            last_bytes = cur_bytes
+            DW_LOGGER.info(
+                "COMM METRICS | "
+                "rates(deframe=%.1f/s send=%.1f/s bytes=%.0f/s) | "
+                "totals(deframed=%d sent=%d) | "
+                "queue_depth=%d",
+                deframe_rate,
+                send_rate,
+                byte_rate,
+                cur_deframed,
+                cur_sent,
+                self.outgoing.qsize(),
+            )
 
     def stop(self):
         """Stop the thread depends will close the ground resource which may be blocking"""
