@@ -122,8 +122,9 @@ class Downlinker:
         while self.running:
             frames = []
             try:
-                # Blocking read of at least one frame, then drain the entire queue
-                frames.append(self.outgoing.get(timeout=0.500))
+                # Blocking read of at least one frame with short timeout for responsiveness
+                frames.append(self.outgoing.get(timeout=0.050))
+                # Drain any additional frames that arrived during the blocking wait
                 while not self.outgoing.empty():
                     frames.append(self.outgoing.get_nowait())
             except Empty:
