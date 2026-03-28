@@ -90,7 +90,7 @@ class ZmqWrapper(object):
         ), "Cannot connect outgoing multiple times"
         assert self.pub_topic is not None, "Must configure sockets before connecting"
         self.zmq_socket_outgoing = self.context.socket(zmq.PUB)
-        self.zmq_socket_outgoing.setsockopt(zmq.SNDHWM, 0)
+        self.zmq_socket_outgoing.setsockopt(zmq.SNDHWM, 10000)
         # When set to bind sockets, connect via a bind call
         if self.server:
             server_transport = self.transport_url[1].replace("localhost", "127.0.0.1")
@@ -118,7 +118,7 @@ class ZmqWrapper(object):
         ), "Cannot connect incoming multiple times"
         assert self.sub_topic is not None, "Must configure sockets before connecting"
         self.zmq_socket_incoming = self.context.socket(zmq.SUB)
-        self.zmq_socket_incoming.setsockopt(zmq.RCVHWM, 0)
+        self.zmq_socket_incoming.setsockopt(zmq.RCVHWM, 10000)
         self.zmq_socket_incoming.setsockopt(zmq.SUBSCRIBE, self.sub_topic)
         if self.server:
             server_transport = self.transport_url[0].replace("localhost", "127.0.0.1")
