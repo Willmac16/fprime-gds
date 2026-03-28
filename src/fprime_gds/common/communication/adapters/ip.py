@@ -54,21 +54,27 @@ class IpAdapter(fprime_gds.common.communication.adapters.base.BaseAdapter):
     KEEPALIVE_DATA = b"sitting well"
     MAXIMUM_DATA_SIZE = 4096
 
-    def __init__(self, address, port, server=True, keepalive_interval=0.5):
+    def __init__(self, address, port, server=True, keepalive_interval=0.5, udp_downlink_port=None):
         """
         Initialize this adapter by creating a handler for UDP and TCP. A thread for the KEEPALIVE application packets
         will be created, if the interval is not none. Handlers are servers unless server=False.
+
+        When udp_downlink_port is set, downlink data comes exclusively from UDP on that port.
+        TCP is used only for uplink (commands). This avoids TCP backpressure stalling the FSW.
         """
         self.address = address
         self.port = port
         self.stop = False
         self.keepalive_thread = None
         self.keepalive_interval = keepalive_interval
+        self.udp_downlink_port = udp_downlink_port
+        udp_port = udp_downlink_port if udp_downlink_port is not None else port
         self.tcp = TcpHandler(address, port, server=server)
-        self.udp = UdpHandler(address, port, server=server)
+        self.udp = UdpHandler(address, udp_port, server=server)
         self.thtcp = None
         self.thudp = None
         self.data_chunks = queue.Queue()
+        self.tcp_chunks = queue.Queue()  # TCP-only queue (unused when udp_downlink_port is set)
         self.blob = b""
 
     def __repr__(self):
@@ -110,17 +116,25 @@ class IpAdapter(fprime_gds.common.communication.adapters.base.BaseAdapter):
         """Adapter thread function"""
         handler.open()
         while not self.stop:
-            self.data_chunks.put(handler.read())
+            data = handler.read()
+            if self.udp_downlink_port is not None and isinstance(handler, TcpHandler):
+                # When UDP downlink is active, TCP data goes to a separate queue
+                # (only used for uplink receive, not fed to the deframer)
+                self.tcp_chunks.put(data)
+            else:
+                self.data_chunks.put(data)
         handler.close()
 
     def write(self, frame):
         """
-        Send a given framed bit of data by sending it out the serial interface. It will attempt to reconnect if there
-        was a problem previously. This function will return true on success, or false on error.
+        Send a given framed bit of data. Uses UDP when udp_downlink_port is set (full UDP mode),
+        otherwise uses TCP.
 
         :param frame: framed data packet to send out
-        :return: True, when data was sent through the UART. False otherwise.
+        :return: True, when data was sent. False otherwise.
         """
+        if self.udp_downlink_port is not None:
+            return self.udp.write(frame)
         if self.tcp.connected == IpHandler.CONNECTED:
             return self.tcp.write(frame)
 
@@ -191,6 +205,12 @@ class IpAdapter(fprime_gds.common.communication.adapters.base.BaseAdapter):
                 "default": 0.5000,
                 "help": "Keep alive packet interval. 0.0 = off, default = 0.5",
             },
+            ("--udp-downlink-port",): {
+                "dest": "udp_downlink_port",
+                "type": int,
+                "default": None,
+                "help": "UDP port for downlink telemetry. When set, downlink uses UDP (no TCP backpressure). FSW sends UDP to this port, TCP is uplink-only.",
+            },
         }
 
     @classmethod
@@ -200,7 +220,7 @@ class IpAdapter(fprime_gds.common.communication.adapters.base.BaseAdapter):
         return cls
 
     @classmethod
-    def check_arguments(cls, address, port, server=True, keepalive_interval=0.5):
+    def check_arguments(cls, address, port, server=True, keepalive_interval=0.5, udp_downlink_port=None):
         """
         Code that should check arguments of this adapter. If there is a problem with this code, then a "ValueError"
         should be raised describing the problem with these arguments.
@@ -473,6 +493,7 @@ class UdpHandler(IpHandler):
         :param port: port of UDP
         """
         super().__init__(address, port, socket.SOCK_DGRAM, server, logger)
+        self.peer_address = None  # Captured from first received datagram
 
     def open_impl(self):
         """No extra steps required"""
@@ -483,12 +504,20 @@ class UdpHandler(IpHandler):
     def read_impl(self):
         """
         Receive from the UDP handler. This involves receiving from an unconnected socket.
+        Captures the sender's address for reply (write_impl).
         """
         (data, address) = self.socket.recvfrom(IpAdapter.MAXIMUM_DATA_SIZE)
+        if self.peer_address is None and address is not None:
+            self.peer_address = address
+            self.logger.info("UDP peer discovered: %s:%d", address[0], address[1])
         return data
 
     def write_impl(self, message):
         """
-        Write not implemented with UDP
+        Send data back to the peer via UDP. The peer address is captured from the first
+        received datagram. If no peer has been seen yet, the write is silently dropped.
         """
-        raise NotImplementedError("UDP Handler cannot send data.")
+        if self.peer_address is None:
+            self.logger.warning("UDP write attempted before peer discovered, dropping")
+            return
+        self.socket.sendto(message, self.peer_address)
