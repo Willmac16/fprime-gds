@@ -73,6 +73,10 @@ class Distributor(DataHandler):
         Raw messages include a length and descriptor header in front of the
         message data.
 
+        Uses an offset-based approach to avoid O(n) bytearray deletions on
+        each iteration. Only performs a single deletion at the end for all
+        consumed bytes.
+
         Args:
             data (bytearray): Binary data to parse. First byte of data should be
                               the first byte of a valid raw message.
@@ -82,7 +86,8 @@ class Distributor(DataHandler):
             Where leftover_data is a bytearray of anything at the end of data
             that could not be parsed (due to insufficient length).
         """
-        data_left = data
+        offset = 0
+        data_len = len(data)
 
         raw_msgs = []
         # Keep parsing and then break when you can't parse no more
@@ -92,30 +97,36 @@ class Distributor(DataHandler):
                 while True:
                     # Check if we have enough data to parse a key
                     # if not, bail on the function
-                    if len(data_left) < self.key_obj.getSize():
-                        return data_left, raw_msgs
+                    if (data_len - offset) < self.key_obj.getSize():
+                        del data[:offset]
+                        return data, raw_msgs
                     # Check leading key size bytes to see if it is the key
-                    self.key_obj.deserialize(data_left, 0)
+                    self.key_obj.deserialize(data, offset)
                     if self.key_obj.val != self.key_frame:
-                        del data_left[0]
+                        offset += 1
                         continue
                     # Key found break
-                    del data_left[: self.key_obj.getSize()]
+                    offset += self.key_obj.getSize()
                     break
 
+            remaining = data_len - offset
             # Check if we have enough data to parse a length
-            if len(data_left) < self.len_obj.getSize():
+            if remaining < self.len_obj.getSize():
                 break
-            self.len_obj.deserialize(data_left, 0)
+            self.len_obj.deserialize(data, offset)
             expected_len = self.len_obj.val + self.len_obj.getSize()
 
             # Check if we have enough data to parse
-            if len(data_left) < expected_len:
+            if remaining < expected_len:
                 break
 
-            raw_msgs.append(data_left[:expected_len])
-            del data_left[:expected_len]
-        return data_left, raw_msgs
+            raw_msgs.append(data[offset : offset + expected_len])
+            offset += expected_len
+
+        # Remove all consumed bytes in one operation
+        if offset > 0:
+            del data[:offset]
+        return data, raw_msgs
 
     def parse_raw_msg_api(self, raw_msg):
         """
