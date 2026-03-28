@@ -198,11 +198,11 @@ class Distributor(DataHandler):
                 )
             except DeserializeException as deserialize_exception:
                 LOGGER.warning(f"Invalid message: {deserialize_exception}")
-                return
+                continue
             decoders = self.__decoders.get(data_desc_key, None)
             if not decoders:
                 LOGGER.warning(f"No decoder registered for: {data_desc_key}")
-                return
+                continue
 
             for d in decoders:
                 try:
